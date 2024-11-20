@@ -111,7 +111,7 @@ torch.manual_seed(RANDOM_SEED)
 # Initialize the model
 model = LeNet5(NUM_CLASSES, GRAYSCALE)
 model.to(DEVICE)
-model = torch.jit.script(model)
+#model = torch.jit.script(model)
 
 # Define optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
