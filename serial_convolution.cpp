@@ -2,94 +2,154 @@
 #include <vector>
 #include <cmath>
 #include <ctime>
+#include <cstdlib>
+#include <omp.h>
 
-// Function to perform `im2col` transformation
-void im2col(const std::vector<std::vector<double>>& input, 
-            std::vector<std::vector<double>>& im2col_matrix,
-            int input_h, int input_w, int filter_h, int filter_w, 
-            int stride, int padding) {
-    int output_h = (input_h - filter_h + 2 * padding) / stride + 1;
-    int output_w = (input_w - filter_w + 2 * padding) / stride + 1;
+// Define volume_t and conv_layer_t structures
+typedef struct {
+    double *weights;
+    int width;
+    int height;
+    int depth;
+} volume_t;
 
-    int col_idx = 0;
-    for (int y = 0; y < output_h; ++y) {
-        for (int x = 0; x < output_w; ++x) {
-            for (int fy = 0; fy < filter_h; ++fy) {
-                for (int fx = 0; fx < filter_w; ++fx) {
-                    int in_y = y * stride + fy - padding;
-                    int in_x = x * stride + fx - padding;
-                    im2col_matrix[col_idx][fy * filter_w + fx] =
-                        (in_y >= 0 && in_y < input_h && in_x >= 0 && in_x < input_w) 
-                        ? input[in_y][in_x]
-                        : 0.0;
+typedef struct {
+    volume_t **filters;
+    double *biases;
+    int filter_width;
+    int stride;
+    int pad;
+    int output_depth;
+    int output_width;
+    int output_height;
+} conv_layer_t;
+
+// Optimized Convolution Forward Function with OpenMP and Batch Processing
+void conv_forward(conv_layer_t *l, volume_t **inputs, volume_t **outputs, int batch_size) {
+    int stride = l->stride;
+    int pad = l->pad;
+    int filter_width = l->filter_width;
+    int output_depth = l->output_depth;
+    int output_height = l->output_height;
+    int output_width = l->output_width;
+
+    for (int i = 0; i < batch_size; i++) {
+        #pragma omp parallel for
+        for (int f = 0; f < output_depth; f++) {
+            for (int out_y = 0; out_y < output_height; out_y++) {
+                for (int out_x = 0; out_x < output_width; out_x++) {
+                    for (int fd = 0; fd < inputs[i]->depth; fd++) {
+                        double sum = 0.0;
+                        int y_start = out_y * stride - pad;
+                        int x_start = out_x * stride - pad;
+                        for (int fy = 0; fy < filter_width; fy++) {
+                            int in_y = y_start + fy;
+                            if (in_y >= 0 && in_y < inputs[i]->height) {
+                                for (int fx = 0; fx < filter_width; fx++) {
+                                    int in_x = x_start + fx;
+                                    if (in_x >= 0 && in_x < inputs[i]->width) {
+                                        double filter_value = l->filters[f]->weights[((fy * filter_width) + fx) * inputs[i]->depth + fd];
+                                        double input_value = inputs[i]->weights[((in_y * inputs[i]->width) + in_x) * inputs[i]->depth + fd];
+                                        sum += filter_value * input_value;
+                                    }
+                                }
+                            }
+                        }
+                        sum += l->biases[f];
+                        outputs[i]->weights[((out_y * output_width) + out_x) * output_depth + f] = sum;
+                    }
                 }
             }
-            ++col_idx;
-        }
-    }
-}
-
-// Serial Convolution Function using `im2col`
-void serial_convolution(const std::vector<std::vector<double>>& im2col_matrix,
-                        const std::vector<std::vector<double>>& filter,
-                        std::vector<std::vector<double>>& output, 
-                        int output_h, int output_w, int filter_h, int filter_w) {
-    for (int y = 0; y < output_h; ++y) {
-        for (int x = 0; x < output_w; ++x) {
-            double sum = 0.0;
-            for (int fy = 0; fy < filter_h; ++fy) {
-                for (int fx = 0; fx < filter_w; ++fx) {
-                    sum += im2col_matrix[y * output_w + x][fy * filter_w + fx] * filter[fy][fx];
-                }
-            }
-            output[y][x] = sum;
         }
     }
 }
 
 int main() {
-    // Image and filter dimensions
-    int input_h = 4096, input_w = 4096;
-    int filter_h = 3, filter_w = 3;
-    int stride = 1, padding = 0;
+    // Increased batch size and decreased input dimensions
+    int batch_size = 1;  // Increased batch size
+    int input_h = 4096;    // Decreased input height
+    int input_w = 4096;    // Decreased input width
+    int input_depth = 1;  // Example depth for RGB images
 
-    // Calculate output dimensions
-    int output_h = (input_h - filter_h + 2 * padding) / stride + 1;
-    int output_w = (input_w - filter_w + 2 * padding) / stride + 1;
+    // Allocate and initialize input data, weights, etc.
+    volume_t **test_data = (volume_t **)malloc(batch_size * sizeof(volume_t *));
+    conv_layer_t *conv1 = (conv_layer_t *)malloc(sizeof(conv_layer_t));
+    conv1->filters = (volume_t **)malloc(6 * sizeof(volume_t *));
+    conv1->biases = (double *)malloc(6 * sizeof(double));
+    conv1->filter_width = 5;
+    conv1->stride = 1;
+    conv1->pad = 2;  // Adjusted padding to maintain output dimensions
+    conv1->output_depth = 6;
+    conv1->output_width = (input_w - conv1->filter_width + 2 * conv1->pad) / conv1->stride + 1;
+    conv1->output_height = (input_h - conv1->filter_width + 2 * conv1->pad) / conv1->stride + 1;
 
-    // Initialize input, filter, and output
-    std::vector<std::vector<double>> input(input_h, std::vector<double>(input_w));
-    std::vector<std::vector<double>> filter(filter_h, std::vector<double>(filter_w));
-    std::vector<std::vector<double>> output(output_h, std::vector<double>(output_w, 0.0));
+    volume_t **conv1_outputs = (volume_t **)malloc(batch_size * sizeof(volume_t *));
 
-    // Fill input and filter with random values
-    for (int i = 0; i < input_h; ++i) {
-        for (int j = 0; j < input_w; ++j) {
-            input[i][j] = static_cast<double>(rand()) / RAND_MAX;
+    // Initialize input data
+    for (int i = 0; i < batch_size; ++i) {
+        test_data[i] = (volume_t *)malloc(sizeof(volume_t));
+        test_data[i]->weights = (double *)malloc(input_h * input_w * input_depth * sizeof(double));
+        test_data[i]->width = input_w;
+        test_data[i]->height = input_h;
+        test_data[i]->depth = input_depth;
+        for (int j = 0; j < input_h * input_w * input_depth; ++j) {
+            test_data[i]->weights[j] = static_cast<double>(rand()) / RAND_MAX;
         }
     }
-    for (int i = 0; i < filter_h; ++i) {
-        for (int j = 0; j < filter_w; ++j) {
-            filter[i][j] = static_cast<double>(rand()) / RAND_MAX;
+
+    // Initialize filters and biases
+    for (int i = 0; i < conv1->output_depth; ++i) {
+        conv1->filters[i] = (volume_t *)malloc(sizeof(volume_t));
+        conv1->filters[i]->weights = (double *)malloc(input_depth * conv1->filter_width * conv1->filter_width * sizeof(double));
+        conv1->filters[i]->width = conv1->filter_width;
+        conv1->filters[i]->height = conv1->filter_width;
+        conv1->filters[i]->depth = input_depth;
+        for (int j = 0; j < input_depth * conv1->filter_width * conv1->filter_width; ++j) {
+            conv1->filters[i]->weights[j] = static_cast<double>(rand()) / RAND_MAX;
         }
+        conv1->biases[i] = static_cast<double>(rand()) / RAND_MAX;
     }
 
-    // Initialize im2col matrix
-    std::vector<std::vector<double>> im2col_matrix(output_h * output_w, std::vector<double>(filter_h * filter_w));
+    // Initialize output volumes
+    for (int i = 0; i < batch_size; ++i) {
+        conv1_outputs[i] = (volume_t *)malloc(sizeof(volume_t));
+        conv1_outputs[i]->weights = (double *)malloc(conv1->output_height * conv1->output_width * conv1->output_depth * sizeof(double));
+        conv1_outputs[i]->width = conv1->output_width;
+        conv1_outputs[i]->height = conv1->output_height;
+        conv1_outputs[i]->depth = conv1->output_depth;
+    }
 
-    // Start timing
-    clock_t start = clock();
+    struct timespec start, stop;
+    double time;
 
-    // Perform `im2col` and convolution
-    im2col(input, im2col_matrix, input_h, input_w, filter_h, filter_w, stride, padding);
-    serial_convolution(im2col_matrix, filter, output, output_h, output_w, filter_h, filter_w);
+    // Start timing for execution time measurement
+    if (clock_gettime(CLOCK_REALTIME, &start) == -1) { perror("clock gettime"); }
 
-    // Stop timing
-    clock_t end = clock();
-    double elapsed_time = static_cast<double>(end - start) / CLOCKS_PER_SEC;
+    // Convolution with OpenMP
+    conv_forward(conv1, test_data, conv1_outputs, batch_size);
 
-    // Output execution time
-    std::cout << "Serial Convolution Execution Time: " << elapsed_time << " seconds" << std::endl;
+    // Stop timing and calculate execution time
+    if (clock_gettime(CLOCK_REALTIME, &stop) == -1) { perror("clock gettime"); }
+    time = (stop.tv_sec - start.tv_sec) + (double)(stop.tv_nsec - start.tv_nsec) / 1e9;
+
+    std::cout << "Serial Convolution Execution Time: " << time << " sec" << std::endl;
+
+    // Release memory
+    for (int i = 0; i < batch_size; ++i) {
+        free(test_data[i]->weights);
+        free(test_data[i]);
+        free(conv1_outputs[i]->weights);
+        free(conv1_outputs[i]);
+    }
+    for (int i = 0; i < conv1->output_depth; ++i) {
+        free(conv1->filters[i]->weights);
+        free(conv1->filters[i]);
+    }
+    free(conv1->filters);
+    free(conv1->biases);
+    free(conv1);
+    free(test_data);
+    free(conv1_outputs);
 
     return 0;
 }
