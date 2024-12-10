@@ -4,5 +4,6 @@
 - To execute with static image size and filter size simply choose one of the files and change the list of images/filter sizes to a single integer
 - Python file used to create visuals (original visuals from report included)
 - To compile and run one of the cpp files:
-- - export OMP_NUM_THREADS=<number>
-- - taskset --cpu-list <cores> ./<program_name>
+  - export OMP_NUM_THREADS="number"
+  - taskset --cpu-list "cores" ./"program_name"
+  - no quotes just write the number/name as is
