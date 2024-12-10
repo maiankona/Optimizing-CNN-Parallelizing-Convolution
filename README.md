@@ -1,1 +1,1 @@
-# Quantized-LeNet-5-CPU-Throughput-Scaling
+# Optimizing Convolutional Neural Networks: Parallelizing Convolution
